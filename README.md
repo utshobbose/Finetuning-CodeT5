@@ -1,4 +1,4 @@
-Fine-tuning CodeT5-Large on the TSSB-3M dataset for code-related tasks.
+##Fine-tuning CodeT5-Large on the TSSB-3M dataset for code-related tasks.
 
 ---
 
@@ -101,11 +101,6 @@ The `processed_data/` folder contains pre-split, ready-to-use JSONL files:
 
 ---
 
-## 📄 License
-
-[Add your license here]
-
----
 
 ## 🙏 Acknowledgements
 
