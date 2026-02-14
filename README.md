@@ -37,9 +37,8 @@ The raw dataset (`tssb_data_3M.zip`) is **not included** in this repository due 
 
    | Source | Link |
    |--------|------|
-   | 🤗 Hugging Face | [Add link here] |
-   | Google Drive | [Add link here] |
-   | Zenodo / Other | [Add link here] |
+   | 🤗 Hugging Face | [https://huggingface.co/datasets/zirui3/TSSB-3M-instructions/tree/main] |
+   | GitHub | [[https://cedricrupb.github.io/TSSB3M/] |
 
 2. Place the downloaded file at:
    ```
