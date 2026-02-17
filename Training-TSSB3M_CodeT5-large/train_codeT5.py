@@ -1,11 +1,9 @@
 """
-CodeT5 Fine-tuning for Bug Fix Explanation and Correction
-Based on thesis: "AI-Assisted Code Generation Tools: A New Frontier in Software Development"
-
-Hardware: RTX 3060 12GB
+CodeT5-Large with LoRA Fine-Tuning
+GPU: RTX 3060 12GB
 Model: Salesforce/codet5-large
-Method: Full fine-tuning (no quantization needed)
-Training Time: 8-12 hours
+Method: LoRA (Low-Rank Adaptation) - only ~1% parameters trainable
+Training Time: 2-3 hours
 """
 
 import os
@@ -17,32 +15,45 @@ from transformers import (
     AutoTokenizer,
     TrainingArguments,
     Trainer,
-    DataCollatorForSeq2Seq
+    DataCollatorForSeq2Seq,
+    EarlyStoppingCallback
 )
 from peft import LoraConfig, get_peft_model, TaskType
 
+# ==============================
 # Configuration
-MODEL_NAME = "Salesforce/codet5-large"  # 770M params
+# ==============================
+
+MODEL_NAME = "Salesforce/codet5-large"
 DATA_PATH = "./processed_data"
-OUTPUT_DIR = "./codet5-finetuned"
-MAX_SOURCE_LENGTH = 512
-MAX_TARGET_LENGTH = 512
+OUTPUT_DIR = "./codet5-lora-finetuned"
 
-# LoRA Configuration (optional - remove for full fine-tuning)
-USE_LORA = False  # Set True for faster training, False for full fine-tuning
+MAX_SOURCE_LENGTH = 256    # Change from 512
+MAX_TARGET_LENGTH = 256    # Change from 512
 
+# LoRA Configuration
 LORA_CONFIG = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    target_modules=["q", "v", "k", "o", "wi", "wo"],
-    lora_dropout=0.05,
+    r=16,                    # Rank - higher = more capacity
+    lora_alpha=32,          # Scaling factor
+    target_modules=[        # Which layers to adapt
+        "q",                # Query projection
+        "v",                # Value projection
+        "k",                # Key projection
+        "o",                # Output projection
+        "wi",               # Feed-forward input
+        "wo",               # Feed-forward output
+    ],
+    lora_dropout=0.1,       # Dropout for regularization
     bias="none",
     task_type=TaskType.SEQ_2_SEQ_LM,
 )
 
 
+# ==============================
+# Data Loading
+# ==============================
+
 def load_jsonl(file_path):
-    """Load JSONL file."""
     data = []
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -51,143 +62,150 @@ def load_jsonl(file_path):
 
 
 def prepare_dataset(tokenizer):
-    """Load and prepare training data for T5 format."""
     print("Loading training data...")
-    
+
     train_data = load_jsonl(f"{DATA_PATH}/train.jsonl")
     val_data = load_jsonl(f"{DATA_PATH}/val.jsonl")
-    
-    print(f"Loaded {len(train_data)} training examples")
-    print(f"Loaded {len(val_data)} validation examples")
-    
+
+    print(f"Training examples: {len(train_data)}")
+    print(f"Validation examples: {len(val_data)}")
+
     def format_t5(example):
-        # T5 uses task prefix format
-        input_text = f"fix bug: {example['input']}"
-        target_text = example['output']
-        return {"input": input_text, "target": target_text}
-    
+        return {
+            "input": f"fix bug: {example['input']}",
+            "target": example["output"]
+        }
+
     train_formatted = [format_t5(ex) for ex in train_data]
     val_formatted = [format_t5(ex) for ex in val_data]
-    
+
     train_dataset = Dataset.from_list(train_formatted)
     val_dataset = Dataset.from_list(val_formatted)
-    
+
     def preprocess_function(examples):
-        inputs = tokenizer(
+        model_inputs = tokenizer(
             examples["input"],
             max_length=MAX_SOURCE_LENGTH,
             truncation=True,
-            padding="max_length",
+            padding=False
         )
-        
-        targets = tokenizer(
-            examples["target"],
-            max_length=MAX_TARGET_LENGTH,
-            truncation=True,
-            padding="max_length",
-        )
-        
-        # Replace padding token id with -100 for loss computation
-        labels = targets["input_ids"].copy()
-        labels = [
-            [(label if label != tokenizer.pad_token_id else -100) for label in labels_example]
-            for labels_example in labels
-        ]
-        
-        inputs["labels"] = labels
-        return inputs
-    
+
+        with tokenizer.as_target_tokenizer():
+            labels = tokenizer(
+                examples["target"],
+                max_length=MAX_TARGET_LENGTH,
+                truncation=True,
+                padding=False
+            )
+
+        model_inputs["labels"] = labels["input_ids"]
+        return model_inputs
+
     train_dataset = train_dataset.map(
         preprocess_function,
         batched=True,
         remove_columns=train_dataset.column_names,
     )
-    
+
     val_dataset = val_dataset.map(
         preprocess_function,
         batched=True,
         remove_columns=val_dataset.column_names,
     )
-    
+
     return train_dataset, val_dataset
 
 
+# ==============================
+# Main Training
+# ==============================
+
 def main():
+
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA not available. Need GPU for training.")
-    
-    gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
+        raise RuntimeError("CUDA not available. GPU required.")
+
     print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"GPU Memory: {gpu_memory:.2f} GB")
+    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     print(f"Model: {MODEL_NAME}")
-    
-    print(f"\nLoading tokenizer...")
+
+    print("\nLoading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    
-    print(f"Loading model...")
+
+    print("Loading model...")
     model = AutoModelForSeq2SeqLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.float16,  # Use fp16 for faster training
-        device_map="auto",
+        torch_dtype=torch.float32  # Use full precision for stability
     )
-    model.gradient_checkpointing_enable()
-    
-    if USE_LORA:
-        print("Applying LoRA...")
-        model = get_peft_model(model, LORA_CONFIG)
-        model.print_trainable_parameters()
-    else:
-        print("Full fine-tuning (all parameters)")
-        total_params = sum(p.numel() for p in model.parameters())
-        print(f"Total parameters: {total_params:,}")
-    
+
+    # Apply LoRA
+    print("Applying LoRA...")
+    model = get_peft_model(model, LORA_CONFIG)
+    # model.gradient_checkpointing_enable()
+    model.print_trainable_parameters()
+
     train_dataset, val_dataset = prepare_dataset(tokenizer)
-    
-    # Training arguments for RTX 3060 12GB
+
+    # ==============================
+    # Training Arguments
+    # ==============================
+
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
+
+        # Training
         num_train_epochs=3,
-        per_device_train_batch_size=2,
-        per_device_eval_batch_size=2,
-        gradient_accumulation_steps=4,
-        optim="adamw_torch",
-        save_steps=1000,
-        logging_steps=100,
-        learning_rate=5e-5,
+        learning_rate=1e-4,        # Higher LR works with LoRA
         weight_decay=0.01,
+        label_smoothing_factor=0.1,
+
+        # Batch - can use larger batch with LoRA
+        per_device_train_batch_size=2,      # Change from 4
+        per_device_eval_batch_size=2,       # Change from 4
+        gradient_accumulation_steps=4,      # Change from 2 (effective batch still 8)
+
+        # Stability
         fp16=False,
         max_grad_norm=1.0,
-        warmup_steps=500,
-        lr_scheduler_type="linear",
-        report_to="tensorboard",
-        eval_strategy="steps",        # Fixed here
+        warmup_ratio=0.1,          # Longer warmup
+        lr_scheduler_type="cosine",
+
+        # Evaluation
+        eval_strategy="steps",
         eval_steps=500,
+        save_steps=500,
+        logging_steps=100,
         load_best_model_at_end=True,
         save_total_limit=2,
+
+        # Performance
         dataloader_num_workers=2,
+        report_to="tensorboard",
     )
-    
+
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
         model=model,
-        padding=True,
+        padding=True
     )
-    
+
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         data_collator=data_collator,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
-    
+
     print("\nStarting training...")
     trainer.train()
-    
-    print(f"\nSaving model to {OUTPUT_DIR}/final")
-    trainer.save_model(f"{OUTPUT_DIR}/final")
+
+    print("\nSaving final model...")
+    # Save only LoRA adapters (small file)
+    model.save_pretrained(f"{OUTPUT_DIR}/final")
     tokenizer.save_pretrained(f"{OUTPUT_DIR}/final")
-    
+
     print("Training complete!")
 
 

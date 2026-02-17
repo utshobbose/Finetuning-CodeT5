@@ -1,31 +1,42 @@
 """
-Inference script for fine-tuned CodeT5 model.
+Inference script for fine-tuned CodeT5 with LoRA.
+Loads base model + LoRA adapters.
 """
 
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from peft import PeftModel
 
-MODEL_PATH = "./codet5-finetuned/final"
+BASE_MODEL = "Salesforce/codet5-large"
+ADAPTER_PATH = "./codet5-lora-finetuned/final"
 
 
 def load_model():
-    """Load fine-tuned CodeT5 model."""
-    print("Loading model...")
+    """Load base model + LoRA adapters."""
+    print("Loading base model...")
     
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+    
+    # Load base model in fp16 for faster inference
     model = AutoModelForSeq2SeqLM.from_pretrained(
-        MODEL_PATH,
+        BASE_MODEL,
         torch_dtype=torch.float16,
         device_map="auto",
     )
+    
+    print("Loading LoRA adapters...")
+    model = PeftModel.from_pretrained(model, ADAPTER_PATH)
     model.eval()
     
+    # Merge adapters for faster inference (optional)
+    # model = model.merge_and_unload()
+    
+    print("Model ready!")
     return model, tokenizer
 
 
-def generate_fix(model, tokenizer, buggy_code):
+def generate_fix(model, tokenizer, buggy_code, max_length=512):
     """Generate bug explanation and fix."""
-    # T5 uses task prefix
     input_text = f"fix bug: {buggy_code}"
     
     inputs = tokenizer(
@@ -33,13 +44,13 @@ def generate_fix(model, tokenizer, buggy_code):
         return_tensors="pt",
         max_length=512,
         truncation=True,
-    ).to("cuda")
+    ).to(model.device)
     
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_length=512,
-            num_beams=4,           # Better quality than sampling
+            max_length=max_length,
+            num_beams=4,
             early_stopping=True,
             no_repeat_ngram_size=2,
         )
@@ -51,20 +62,37 @@ def generate_fix(model, tokenizer, buggy_code):
 def main():
     model, tokenizer = load_model()
     
-    # Test example
-    test_code = """def divide(a, b):
+    # Test examples
+    test_cases = [
+        """def divide(a, b):
     return a / b
 
 result = divide(10, 0)
-print(result)"""
+print(result)""",
+        
+        """def get_item(lst, index):
+    return lst[index]
+
+my_list = [1, 2, 3]
+print(get_item(my_list, 5))""",
+        
+        """def add_numbers(a, b)
+    return a + b
+
+print(add_numbers(3, 4))""",
+    ]
     
-    print("Buggy code:")
-    print(test_code)
-    print("\n" + "="*50 + "\n")
-    
-    fix = generate_fix(model, tokenizer, test_code)
-    print("Model output:")
-    print(fix)
+    for i, test_code in enumerate(test_cases, 1):
+        print(f"\n{'='*60}")
+        print(f"Test Case {i}")
+        print(f"{'='*60}")
+        print("Buggy code:")
+        print(test_code)
+        print(f"\n{'-'*60}")
+        print("Model output:")
+        fix = generate_fix(model, tokenizer, test_code)
+        print(fix)
+        print(f"{'='*60}")
 
 
 if __name__ == "__main__":
