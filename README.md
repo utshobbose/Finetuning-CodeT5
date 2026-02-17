@@ -109,3 +109,8 @@ The `processed_data/` folder contains pre-split, ready-to-use JSONL files:
 - [TSSB-3M Dataset](https://github.com/cedricrupb/TSSB-3M)
 - [CodeT5](https://github.com/salesforce/CodeT5)
 - [CodeLlama](https://github.com/facebookresearch/codellama)
+
+
+##  Training Screenshots
+<img width="1058" height="257" alt="image" src="https://github.com/user-attachments/assets/be8df186-76cb-443a-bb80-a6d693a4e1da" />
+
