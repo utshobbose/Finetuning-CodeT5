@@ -112,5 +112,10 @@ The `processed_data/` folder contains pre-split, ready-to-use JSONL files:
 
 
 ##  Training Screenshots
-<img width="1058" height="257" alt="image" src="https://github.com/user-attachments/assets/be8df186-76cb-443a-bb80-a6d693a4e1da" />
+<img width="1061" height="159" alt="image" src="https://github.com/user-attachments/assets/f55ffd2c-6fdf-4629-9a37-890932c06703" />
+
+
+## Test Case Screenshots
+<img width="282" height="590" alt="image" src="https://github.com/user-attachments/assets/be67cca1-c7dd-4dca-95ba-d8e07c42ea15" />
+
 
